@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Optimized Route - Lemgo</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>#map { height: 90vh; }</style>
+</head>
+<body>
+  <h1>Optimized Bin Collection Route</h1>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([52.027, 8.899], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    fetch('/route')
+      .then(res => res.json())
+      .then(route => {
+        if (route.length === 0) {
+          alert("No bins require collection.");
+          return;
+        }
+
+        const latlngs = [];
+
+        route.forEach((bin, index) => {
+          const latlng = [bin.lat, bin.lon];
+          latlngs.push(latlng);
+
+          const marker = L.marker(latlng).addTo(map);
+          marker.bindPopup(`${index + 1}. ${bin.location}<br>Fill: ${bin.fill}%`);
+        });
+
+        L.polyline(latlngs, {color: 'blue'}).addTo(map);
+      });
+  </script>
+</body>
+</html>

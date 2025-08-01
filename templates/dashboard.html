@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>IoT-Based Waste Management Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+  <style>
+    #map { height: 400px; }
+    .status-full { background-color: #ffcccc; }
+    .status-nearly_full { background-color: #fff0b3; }
+    .status-inactive { background-color: #cce5ff; }
+    .status-ok { background-color: #ccffcc; }
+    .bin-details { display: none; }
+    button, select { margin-right: 15px; margin-bottom: 10px; }
+  </style>
+</head>
+<body class="container py-4">
+  <h2>IoT-Based Waste Management Dashboard</h2>
+
+  <!-- Threshold Sliders -->
+  <div class="row mb-3">
+    <div class="col">
+      <label>Full Threshold</label>
+      <input type="range" id="full-threshold" min="0" max="100" value="80" class="form-range" />
+      <div><strong>Full:</strong> <span id="full-val">80%</span></div>
+    </div>
+    <div class="col">
+      <label>Nearly Full Threshold</label>
+      <input type="range" id="nearly-threshold" min="0" max="100" value="60" class="form-range" />
+      <div><strong>Nearly Full:</strong> <span id="nearly-val">60%</span></div>
+    </div>
+    <div class="col">
+      <label>Inactive (days)</label>
+      <input type="range" id="inactive-threshold" min="0" max="30" value="7" class="form-range" />
+      <div><strong>Inactive after:</strong> <span id="inactive-val">5</span> days</div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <button class="btn btn-success" onclick="showRoute()">Optimized Route</button>
+  <button class="btn btn-info" onclick="openGoogleMapsRoute()">View in Google Maps</button>
+  <button class="btn btn-warning" onclick="simulateReport()">Mark OK</button>
+
+  <div class="mb-3">
+    <select id="bin-select" multiple class="form-select w-25"></select>
+  </div>
+
+  <!-- Map -->
+  <div id="map" class="my-3"></div>
+
+  <!-- Bin Buttons -->
+  <div class="row row-cols-auto g-2 mb-3">
+    {% for bin in range(1, 21) %}
+      <div class="col">
+        <a id="bin-tab-{{ bin }}" href="/bin/{{ bin }}" class="btn btn-sm w-100 btn-outline-primary">BIN {{ bin }}</a>
+      </div>
+    {% endfor %}
+  </div>
+
+  <!-- Bin Cards -->
+  <div id="bin-cards" class="row d-none"></div>
+
+  <!-- Alert Sidebar -->
+  <div class="position-fixed top-0 end-0 p-3" style="width: 300px; z-index: 1050;">
+    <div class="card">
+      <div class="card-header bg-danger text-white">🚨 Bin Alerts</div>
+      <div class="card-body" id="bin-alert-sidebar">
+        <p class="text-muted">No alerts currently.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    let map = L.map("map").setView([52.03, 8.89], 14);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+    let markers = [], routeLine = null, currentRoute = [];
+
+    function getThresholds() {
+      return {
+        full: +document.getElementById("full-threshold").value,
+        nearly_full: +document.getElementById("nearly-threshold").value,
+        inactive: +document.getElementById("inactive-threshold").value
+      };
+    }
+
+    function updateThresholdLabels() {
+      document.getElementById("full-val").textContent = document.getElementById("full-threshold").value + "%";
+      document.getElementById("nearly-val").textContent = document.getElementById("nearly-threshold").value + "%";
+      document.getElementById("inactive-val").textContent = document.getElementById("inactive-threshold").value;
+    }
+
+    ["full-threshold", "nearly-threshold", "inactive-threshold"].forEach(id => {
+      document.getElementById(id).addEventListener("input", () => {
+        updateThresholdLabels();
+        loadBins(); // Reset route on threshold change
+      });
+    });
+
+    function loadBins() {
+      // Reset route line if any
+      if (routeLine) {
+        map.removeLayer(routeLine);
+        routeLine = null;
+        currentRoute = [];
+      }
+
+      const t = getThresholds();
+      fetch(`/api/bins?full=${t.full}&nearly_full=${t.nearly_full}&inactive=${t.inactive}`)
+        .then(res => res.json())
+        .then(bins => {
+          updateMapAndUI(bins);
+          updateBinButtons(bins);
+        });
+    }
+
+    function simulateReport() {
+      const selected = Array.from(document.getElementById("bin-select").selectedOptions).map(opt => +opt.value);
+      fetch("/api/collect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bin_ids: selected })
+      }).then(() => loadBins());
+    }
+
+    function showRoute() {
+      fetch("/api/optimized_route")
+        .then(res => res.json())
+        .then(data => {
+          if (routeLine) map.removeLayer(routeLine);
+          routeLine = L.polyline(data.path, { color: 'red' }).addTo(map);
+          map.fitBounds(routeLine.getBounds());
+          currentRoute = data.path;
+        });
+    }
+
+    function openGoogleMapsRoute() {
+      if (currentRoute.length < 2) {
+        alert("Load the optimized route first.");
+        return;
+      }
+      const coords = currentRoute.map(p => `${p[0]},${p[1]}`).join('/');
+      const url = `https://www.google.com/maps/dir/${coords}`;
+      window.open(url, '_blank');
+    }
+
+    function updateMapAndUI(bins) {
+      const binSelect = document.getElementById("bin-select");
+      const binCards = document.getElementById("bin-cards");
+      const alertSidebar = document.getElementById("bin-alert-sidebar");
+
+      binSelect.innerHTML = "";
+      binCards.innerHTML = "";
+      markers.forEach(m => map.removeLayer(m));
+      markers = [];
+
+      const fullBins = [], nearlyFullBins = [], inactiveBins = [];
+
+      bins.forEach(bin => {
+        if (bin.id !== 0) {
+          const opt = document.createElement("option");
+          opt.value = bin.id;
+          opt.text = `Bin ${bin.id} (${bin.status})`;
+          binSelect.appendChild(opt);
+        }
+
+        if (bin.status === "full") fullBins.push(bin.id);
+        if (bin.status === "nearly_full") nearlyFullBins.push(bin.id);
+        if (bin.status === "inactive") inactiveBins.push(bin.id);
+
+        const color = bin.type === "HUB" ? "black" :
+                      bin.status === "full" ? "red" :
+                      bin.status === "nearly_full" ? "orange" :
+                      bin.status === "inactive" ? "blue" : "green";
+
+        const marker = L.circleMarker([bin.lat, bin.lon], {
+          radius: 8,
+          fillColor: color,
+          color: color,
+          fillOpacity: 0.7
+        }).bindPopup(`Bin ${bin.id}<br>Type: ${bin.type}<br>Fill: ${bin.fill}%`).addTo(map);
+        markers.push(marker);
+
+        binCards.innerHTML += `
+          <div class="col-md-4">
+            <div class="card mb-3 status-${bin.status}" onclick="toggleDetails(${bin.id})" style="cursor:pointer;">
+              <div class="card-body">
+                <h5>Bin ${bin.id}</h5>
+                <div class="bin-details" id="details-${bin.id}">
+                  <p>Type: ${bin.type}</p>
+                  <p>Location: ${bin.location}</p>
+                  <p>Fill: ${bin.fill}%</p>
+                  <p>Last emptied: ${bin.last_emptied_days_ago} days ago</p>
+                  <p>Status: <strong>${bin.status}</strong></p>
+                </div>
+              </div>
+            </div>
+          </div>`;
+      });
+
+      let alertHTML = "";
+      if (fullBins.length) alertHTML += `<div class="alert alert-danger"><strong>Full Bins:</strong> ${fullBins.join(', ')}</div>`;
+      if (nearlyFullBins.length) alertHTML += `<div class="alert alert-warning"><strong>Nearly Full Bins:</strong> ${nearlyFullBins.join(', ')}</div>`;
+      if (inactiveBins.length) alertHTML += `<div class="alert alert-info"><strong>Inactive Bins:</strong> ${inactiveBins.join(', ')}</div>`;
+
+      alertSidebar.innerHTML = alertHTML || `<p class="text-muted">No alerts currently.</p>`;
+      binCards.style.display = bins.length ? 'flex' : 'none';
+    }
+
+    function updateBinButtons(bins) {
+      const statusClasses = {
+        full: 'btn-danger',
+        nearly_full: 'btn-warning',
+        inactive: 'btn-info',
+        ok: 'btn-success'
+      };
+
+      bins.forEach(bin => {
+        const btn = document.getElementById(`bin-tab-${bin.id}`);
+        if (btn) {
+          btn.className = 'btn btn-sm w-100'; // Reset
+          btn.classList.add(statusClasses[bin.status] || 'btn-outline-primary');
+        }
+      });
+    }
+
+    function toggleDetails(id) {
+      const el = document.getElementById(`details-${id}`);
+      el.style.display = el.style.display === "none" || !el.style.display ? "block" : "none";
+    }
+
+    updateThresholdLabels();
+    loadBins();
+
+    // Auto-refresh and clear route
+    setInterval(() => {
+      fetch('/api/randomize_bins', { method: 'POST' }).then(() => loadBins());
+    }, 30000);
+  </script>
+</body>
+</html>
