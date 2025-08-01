@@ -12,4 +12,4 @@ This prototype demonstrates:
 ## How to Run
 
 ```bash
-python prototype.py
+python bin_app.py
